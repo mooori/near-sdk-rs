@@ -4,13 +4,15 @@ extern crate proc_macro;
 mod core_impl;
 
 use core_impl::ext::generate_ext_structs;
+use core_impl::NearBindgenConfig;
 use proc_macro::TokenStream;
 
 use self::core_impl::*;
+use darling::FromMeta;
 use proc_macro2::Span;
 use quote::quote;
 use syn::visit::Visit;
-use syn::{File, ItemEnum, ItemImpl, ItemStruct, ItemTrait};
+use syn::{parse_macro_input, AttributeArgs, File, ItemEnum, ItemImpl, ItemStruct, ItemTrait};
 
 /// This attribute macro is used on a struct and its implementations
 /// to generate the necessary code to expose `pub` methods from the contract as well
@@ -44,7 +46,15 @@ use syn::{File, ItemEnum, ItemImpl, ItemStruct, ItemTrait};
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn near_bindgen(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn near_bindgen(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    let attr_args = parse_macro_input!(attrs as AttributeArgs);
+    let config = match NearBindgenConfig::from_list(&attr_args) {
+        Ok(args) => args,
+        Err(e) => {
+            return TokenStream::from(e.write_errors());
+        }
+    };
+
     if let Ok(input) = syn::parse::<ItemStruct>(item.clone()) {
         let ext_gen = generate_ext_structs(&input.ident, Some(&input.generics));
         TokenStream::from(quote! {
@@ -67,7 +77,7 @@ pub fn near_bindgen(_attr: TokenStream, item: TokenStream) -> TokenStream {
         let generated_code = item_impl_info.wrapper_code();
 
         // Add wrapper methods for ext call API
-        let ext_generated_code = item_impl_info.generate_ext_wrapper_code();
+        let ext_generated_code = item_impl_info.generate_ext_wrapper_code(&config);
         TokenStream::from(quote! {
             #ext_generated_code
             #input
@@ -122,7 +132,9 @@ pub fn ext_contract(attr: TokenStream, item: TokenStream) -> TokenStream {
             Ok(x) => x,
             Err(err) => return TokenStream::from(err.to_compile_error()),
         };
-        let ext_api = item_trait_info.wrap_trait_ext();
+
+        // TODO(blacklist) rename config type as also relevant for macros other than near_bindgen
+        let ext_api = item_trait_info.wrap_trait_ext(&NearBindgenConfig::default());
 
         TokenStream::from(quote! {
             #input
